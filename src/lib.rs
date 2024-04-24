@@ -14,6 +14,7 @@ use core::{future::Future, pin::Pin, task::Context};
 use alloc::boxed::Box;
 pub use executor::*;
 pub use ops::*;
+pub use task::AsyncTask;
 
 pub struct Select<A, B> {
     inner: Option<(A, B)>,

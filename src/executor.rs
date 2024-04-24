@@ -1,25 +1,13 @@
-use alloc::{
-    boxed::Box,
-    collections::{BTreeMap, VecDeque},
-    sync::Arc,
-    task::Wake,
-};
+use alloc::{collections::VecDeque, sync::Arc, task::Wake, vec::Vec};
+use arch::once::LazyInit;
 use core::{
-    any::Any,
-    future::Future,
-    pin::Pin,
+    sync::atomic::{AtomicBool, Ordering},
     task::{Context, Poll},
 };
-use crossbeam_queue::SegQueue;
+use log::info;
 use sync::Mutex;
 
-pub type DowncastTask = dyn Any + Sync + Send + 'static;
-
-pub trait AsyncTask: Any + Send + Sync {
-    fn get_task_id(&self) -> TaskId;
-    fn before_run(&self);
-    fn as_any(self: Arc<Self>) -> Arc<DowncastTask>;
-}
+use crate::task::{AsyncTask, AsyncTaskItem, PinedFuture, TaskType};
 
 pub struct TaskFutureItem(pub PinedFuture);
 
@@ -27,25 +15,50 @@ unsafe impl Send for TaskFutureItem {}
 unsafe impl Sync for TaskFutureItem {}
 
 pub type TaskId = usize;
-type PinedFuture = Pin<Box<dyn Future<Output = ()>>>;
 pub static CURRENT_TASK: Mutex<Option<Arc<dyn AsyncTask>>> = Mutex::new(None);
 
-pub static FUTURE_LIST: Mutex<BTreeMap<usize, TaskFutureItem>> = Mutex::new(BTreeMap::new());
-pub static TASK_QUEUE: Mutex<VecDeque<Arc<dyn AsyncTask>>> = Mutex::new(VecDeque::new());
+/// FIFO task queue, Items will be pushed to the end of the queue after being called.
+pub static TASK_QUEUE: Mutex<VecDeque<AsyncTaskItem>> = Mutex::new(VecDeque::new());
 /// wake queue, not use at current.
-pub static WAKE_QUEUE: SegQueue<TaskId> = SegQueue::new();
-pub struct Executor;
+
+pub static DEFAULT_EXECUTOR: Executor = Executor::new();
+
+pub struct Executor {
+    cores: LazyInit<Vec<Mutex<Option<Arc<dyn AsyncTask>>>>>,
+    inited: AtomicBool,
+}
 
 impl Executor {
-    pub fn new() -> Self {
-        Executor
+    pub const fn new() -> Self {
+        Executor {
+            cores: LazyInit::new(),
+            inited: AtomicBool::new(false),
+        }
     }
 
-    pub fn spawn(&mut self, task: Arc<dyn AsyncTask>) {
-        TASK_QUEUE.lock().push_back(task)
+    pub fn init(&self, cores: usize) {
+        let mut core_container = Vec::with_capacity(cores);
+        (0..cores).for_each(|_| core_container.push(Mutex::new(None)));
+        self.cores.init_by(core_container);
+        self.inited.store(true, Ordering::SeqCst);
     }
 
-    pub fn run(&mut self) {
+    pub fn spawn(&mut self, task: Arc<dyn AsyncTask>, task_type: TaskType, future: PinedFuture) {
+        TASK_QUEUE.lock().push_back(AsyncTaskItem {
+            future,
+            task_type,
+            task,
+        })
+    }
+
+    pub fn run(&self) {
+        info!("fetch atomic data: {}", self.inited.load(Ordering::SeqCst));
+        info!(
+            "fetch atomic data not: {}",
+            self.inited.load(Ordering::SeqCst)
+        );
+        // Waiting for executor's initialisation finish.
+        while !self.inited.load(Ordering::SeqCst) {}
         loop {
             if TASK_QUEUE.lock().len() == 0 {
                 break;
@@ -55,9 +68,14 @@ impl Executor {
         }
     }
 
-    fn run_ready_task(&mut self) {
+    fn run_ready_task(&self) {
         let task = TASK_QUEUE.lock().pop_front();
-        if let Some(task) = &task {
+        if let Some(task_item) = task {
+            let AsyncTaskItem {
+                task,
+                mut future,
+                task_type,
+            } = task_item;
             task.before_run();
 
             *CURRENT_TASK.lock() = Some(task.clone());
@@ -69,14 +87,13 @@ impl Executor {
             .into();
             let mut context = Context::from_waker(&waker);
 
-            let future = FUTURE_LIST.lock().remove(&task.get_task_id());
-
-            if let Some(mut future) = future {
-                match future.0.as_mut().poll(&mut context) {
-                    Poll::Ready(()) => {} // task done
-                    Poll::Pending => TASK_QUEUE.lock().push_back(task.clone()),
-                }
-                FUTURE_LIST.lock().insert(task.get_task_id(), future);
+            match future.as_mut().poll(&mut context) {
+                Poll::Ready(()) => {} // task done
+                Poll::Pending => TASK_QUEUE.lock().push_back(AsyncTaskItem {
+                    future,
+                    task_type,
+                    task,
+                }),
             }
         }
     }
@@ -89,12 +106,13 @@ impl Executor {
         // }
 
         // log::error!("hlt if idle");
-        // arch::wfi();
+        arch::wfi();
         // log::error!("end");
         // log::error!("hlt if idle end: {}", TASK_QUEUE.lock().len());
     }
 }
 
+#[allow(dead_code)]
 pub struct Waker {
     task_id: TaskId,
 }
@@ -104,9 +122,7 @@ impl Wake for Waker {
         self.wake_by_ref();
     }
 
-    fn wake_by_ref(self: &Arc<Self>) {
-        WAKE_QUEUE.push(self.task_id);
-    }
+    fn wake_by_ref(self: &Arc<Self>) {}
 }
 
 /// Alloc a task id.
@@ -120,13 +136,4 @@ pub fn task_id_alloc() -> TaskId {
 #[inline]
 pub fn current_task() -> Arc<dyn AsyncTask> {
     CURRENT_TASK.lock().as_ref().map(|x| x.clone()).unwrap()
-}
-
-#[inline]
-pub fn current_downcast_task() -> Arc<DowncastTask> {
-    CURRENT_TASK
-        .lock()
-        .as_ref()
-        .map(|x| x.clone().as_any())
-        .unwrap()
 }
