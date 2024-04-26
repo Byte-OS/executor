@@ -15,6 +15,12 @@ pub trait AsyncTask: DowncastSync {
     fn get_task_id(&self) -> TaskId;
     /// Run befire the kernel
     fn before_run(&self);
+    /// Get task type.
+    fn get_task_type(&self) -> TaskType;
+    /// Exit a task with exit code.
+    fn exit(&self, exit_code: usize);
+    /// Check if the task was exited successfully
+    fn exit_code(&self) -> Option<usize>;
 }
 
 /// This is a enum that indicates the task type.
@@ -42,7 +48,6 @@ pub type PinedFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 /// This is a async task container will be called in the Async Task Item
 pub struct AsyncTaskItem {
     pub future: PinedFuture,
-    pub task_type: TaskType,
     pub task: Arc<dyn AsyncTask>,
 }
 
@@ -58,6 +63,21 @@ impl AsyncTask for BlankKernelTask {
     /// maybe I don't need to do this.
     fn before_run(&self) {
         kernel_page_table().change()
+    }
+
+    /// Get task type.
+    fn get_task_type(&self) -> TaskType {
+        TaskType::BlankKernel
+    }
+    
+    /// Exit a task with exit code. But kernel blanktask's exit function never be called. 
+    fn exit(&self, _exit_code: usize) {
+        unreachable!("can't exit blank kernel task")
+    }
+    
+    /// Get the task exit code.
+    fn exit_code(&self) -> Option<usize> {
+        unreachable!("Kernel blanktask can't exit")
     }
 }
 
