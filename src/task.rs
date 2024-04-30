@@ -1,7 +1,7 @@
 use core::{future::Future, pin::Pin};
 
 use alloc::{boxed::Box, sync::Arc};
-use arch::kernel_page_table;
+use polyhal::kernel_page_table;
 use downcast_rs::{impl_downcast, DowncastSync};
 
 use crate::TaskId;

@@ -1,5 +1,5 @@
 use alloc::{collections::VecDeque, sync::{Arc, Weak}, task::Wake, vec::Vec};
-use arch::{hart_id, once::LazyInit};
+use polyhal::{hart_id, once::LazyInit};
 use hashbrown::HashMap;
 use core::{
     sync::atomic::{AtomicBool, Ordering},
