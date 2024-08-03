@@ -1,8 +1,8 @@
 use core::{future::Future, pin::Pin};
 
 use alloc::{boxed::Box, sync::Arc};
-use polyhal::kernel_page_table;
 use downcast_rs::{impl_downcast, DowncastSync};
+use polyhal::boot::boot_page_table;
 
 use crate::TaskId;
 
@@ -62,7 +62,7 @@ impl AsyncTask for BlankKernelTask {
     /// before run switch to kernel page table.
     /// maybe I don't need to do this.
     fn before_run(&self) {
-        kernel_page_table().change()
+        boot_page_table().change()
     }
 
     /// Get task type.

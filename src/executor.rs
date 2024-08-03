@@ -1,5 +1,5 @@
 use alloc::{collections::VecDeque, sync::{Arc, Weak}, task::Wake, vec::Vec};
-use polyhal::{hart_id, utils::LazyInit};
+use polyhal::utils::LazyInit;
 use hashbrown::HashMap;
 use core::{
     sync::atomic::{AtomicBool, Ordering},
@@ -18,6 +18,12 @@ pub(crate) static TASK_QUEUE: Mutex<VecDeque<AsyncTaskItem>> = Mutex::new(VecDeq
 /// wake queue, not use at current.
 
 pub static DEFAULT_EXECUTOR: Executor = Executor::new();
+
+/// Get the hartid. But return 0 always for now.
+#[inline]
+fn hart_id() -> usize {
+    0
+}
 
 pub struct Executor {
     cores: LazyInit<Vec<Mutex<Option<Arc<dyn AsyncTask>>>>>,
@@ -73,7 +79,6 @@ impl Executor {
                 mut future,
             } = task_item;
             task.before_run();
-
             *self.cores[hart_id()].lock() = Some(task.clone());
             // Create Waker
             let waker = Arc::new(Waker {
